@@ -128,6 +128,7 @@ class HAProxy(object):
         self.shutdown_sessions = self.module.params['shutdown_sessions']
 
         self.command_results = []
+        self.stat_output = []
 
     def execute(self, cmd, timeout=200):
         """
@@ -155,28 +156,15 @@ class HAProxy(object):
         set the weight for haproxy backend server when provides.
         """
         svname = host
+
         if self.backend is None:
-            output = self.execute('show stat')
-            #sanitize and make a list of lines
-            output = output.lstrip('# ').strip()
-            output = output.split('\n')
-            result = output
+            backend = self.find_backend(host)
 
-            for line in result:
-                if 'BACKEND' in line:
-                    result =  line.split(',')[0]
-                    pxname = result
-                    cmd = "get weight %s/%s ; enable server %s/%s" % (pxname, svname, pxname, svname)
-                    if weight:
-                        cmd += "; set weight %s/%s %s" % (pxname, svname, weight)
-                    self.execute(cmd)
-
-        else:
-            pxname = backend
-            cmd = "get weight %s/%s ; enable server %s/%s" % (pxname, svname, pxname, svname)
-            if weight:
-                cmd += "; set weight %s/%s %s" % (pxname, svname, weight)
-            self.execute(cmd)
+        pxname = backend
+        cmd = "get weight %s/%s ; enable server %s/%s" % (pxname, svname, pxname, svname)
+        if weight:
+            cmd += "; set weight %s/%s %s" % (pxname, svname, weight)
+        self.execute(cmd)
 
     def disabled(self, host, backend, shutdown_sessions):
         """
@@ -185,33 +173,37 @@ class HAProxy(object):
         also it shutdown sessions while disabling backend host server.
         """
         svname = host
+
         if self.backend is None:
-            output = self.execute('show stat')
-            #sanitize and make a list of lines
-            output = output.lstrip('# ').strip()
-            output = output.split('\n')
-            result = output
+            backend = self.find_backend(host)
 
-            for line in result:
-                if 'BACKEND' in line:
-                    result =  line.split(',')[0]
-                    pxname = result
-                    cmd = "get weight %s/%s ; disable server %s/%s" % (pxname, svname, pxname, svname)
-                    if shutdown_sessions:
-                        cmd += "; shutdown sessions server %s/%s" % (pxname, svname)
-                    self.execute(cmd)
+        pxname = backend
+        cmd = "get weight %s/%s ; disable server %s/%s" % (pxname, svname, pxname, svname)
+        if shutdown_sessions:
+            cmd += "; shutdown sessions server %s/%s" % (pxname, svname)
+        self.execute(cmd)
 
-        else:
-            pxname = backend
-            cmd = "get weight %s/%s ; disable server %s/%s" % (pxname, svname, pxname, svname)
-            if shutdown_sessions:
-                cmd += "; shutdown sessions server %s/%s" % (pxname, svname)
-            self.execute(cmd)
+    def find_backend(self, host):
+        """
+        Find the backend of a specified host, using the stats output
+        """
+        for line in self.stat_output:
+            line_parts = line.split(',')
+            svname = line_parts[1]
+            if (svname == host):
+                return line_parts[0]
+
+    def get_stat_output(self):
+        output = self.execute('show stat')
+        return output.lstrip('# ').strip().split('\n')
 
     def act(self):
         """
         Figure out what you want to do from ansible, and then do it.
         """
+
+        # always get info for idempotence check
+        self.stat_output = self.get_stat_output()
 
         # toggle enable/disbale server
         if self.state == 'enabled':
