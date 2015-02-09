@@ -128,7 +128,7 @@ class HAProxy(object):
         self.shutdown_sessions = self.module.params['shutdown_sessions']
 
         self.command_results = []
-        self.stat_output = []
+        self.host_attributes = []
 
     def execute(self, cmd, timeout=200):
         """
@@ -149,73 +149,91 @@ class HAProxy(object):
         self.client.close()
         return result
 
-    def enabled(self, host, backend, weight):
+    def enabled(self):
         """
         Enabled action, marks server to UP and checks are re-enabled,
         also supports to get current weight for server (default) and
         set the weight for haproxy backend server when provides.
         """
-        svname = host
-
-        if self.backend is None:
-            backend = self.find_backend(host)
-
-        pxname = backend
+        svname = self.host
+        pxname = self.backend
         cmd = "get weight %s/%s ; enable server %s/%s" % (pxname, svname, pxname, svname)
-        if weight:
-            cmd += "; set weight %s/%s %s" % (pxname, svname, weight)
+        if self.weight:
+            cmd += "; set weight %s/%s %s" % (pxname, svname, self.weight)
         self.execute(cmd)
+        return True
 
-    def disabled(self, host, backend, shutdown_sessions):
+    def disabled(self):
         """
         Disabled action, marks server to DOWN for maintenance. In this mode, no more checks will be
         performed on the server until it leaves maintenance,
         also it shutdown sessions while disabling backend host server.
         """
-        svname = host
+        svname = self.host
+        pxname = self.backend
 
-        if self.backend is None:
-            backend = self.find_backend(host)
+        cmd = "get weight %s/%s" % (pxname, svname)
 
-        pxname = backend
-        cmd = "get weight %s/%s ; disable server %s/%s" % (pxname, svname, pxname, svname)
-        if shutdown_sessions:
+        if self.is_host_in_maintanence_mode():
+            self.execute(cmd)
+            return False
+
+        cmd += "; disable server %s/%s" % (pxname, svname)
+
+        if self.shutdown_sessions:
             cmd += "; shutdown sessions server %s/%s" % (pxname, svname)
-        self.execute(cmd)
 
-    def find_backend(self, host):
-        """
-        Find the backend of a specified host, using the stats output
-        """
-        for line in self.stat_output:
-            line_parts = line.split(',')
-            svname = line_parts[1]
-            if (svname == host):
-                return line_parts[0]
+        self.execute(cmd)
+        return True
+
+    def is_host_in_maintanence_mode(self):
+        return self.get_host_attribute('status') == 'MAINT'
+
+    def get_backend(self):
+        return self.get_host_attribute('pxname')
 
     def get_stat_output(self):
         output = self.execute('show stat')
         return output.lstrip('# ').strip().split('\n')
+
+    def get_host_stat_line(self, host, stat_output):
+        for line in stat_output:
+            line_parts = line.split(',')
+            svname = line_parts[1]
+            if (svname == host):
+                return line_parts
+
+    def get_host_attribute(self, name):
+        attributes = {
+            'pxname': 0,
+            'status': 17
+        }
+        return self.host_attributes[attributes.get(name)]
 
     def act(self):
         """
         Figure out what you want to do from ansible, and then do it.
         """
 
-        # always get info for idempotence check
-        self.stat_output = self.get_stat_output()
+        # get info for the current host
+        stat_output = self.get_stat_output()
+        self.host_attributes = self.get_host_stat_line(self.host, stat_output)
+        if self.backend is None:
+            self.backend = self.get_backend()
+
+        changed = True
 
         # toggle enable/disbale server
         if self.state == 'enabled':
-            self.enabled(self.host, self.backend, self.weight)
+            changed = self.enabled()
 
         elif self.state == 'disabled':
-            self.disabled(self.host, self.backend, self.shutdown_sessions)
+            changed = self.disabled()
 
         else:
             self.module.fail_json(msg="unknown state specified: '%s'" % self.state)
 
-        self.module.exit_json(stdout=self.command_results, changed=True)
+        self.module.exit_json(stdout=self.command_results, changed=changed)
 
 def main():
 
