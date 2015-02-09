@@ -157,9 +157,22 @@ class HAProxy(object):
         """
         svname = self.host
         pxname = self.backend
-        cmd = "get weight %s/%s ; enable server %s/%s" % (pxname, svname, pxname, svname)
-        if self.weight:
+
+        cmd = "get weight %s/%s" % (pxname, svname)
+
+        weight_changed = self.is_weight_changed(self.weight)
+        status_changed = self.is_host_in_maintanence_mode()
+
+        if weight_changed is False and status_changed is False:
+            self.execute(cmd)
+            return False
+
+        if weight_changed is True:
             cmd += "; set weight %s/%s %s" % (pxname, svname, self.weight)
+
+        if status_changed is True:
+            cmd += "; enable server %s/%s" % (pxname, svname)
+
         self.execute(cmd)
         return True
 
@@ -192,6 +205,9 @@ class HAProxy(object):
     def get_backend(self):
         return self.get_host_attribute('pxname')
 
+    def get_current_weight(self):
+        return self.get_host_attribute('weight')
+
     def get_stat_output(self):
         output = self.execute('show stat')
         return output.lstrip('# ').strip().split('\n')
@@ -206,15 +222,27 @@ class HAProxy(object):
     def get_host_attribute(self, name):
         attributes = {
             'pxname': 0,
-            'status': 17
+            'status': 17,
+            'weight': 18,
         }
         return self.host_attributes[attributes.get(name)]
+
+    def is_weight_changed(self, weight=None):
+         if weight is None:
+             return False
+
+         current_weight = self.get_current_weight()
+
+         if weight == '100%' and current_weight == "1":
+             return False
+         if weight == '0%' and current_weight == "0":
+             return False
+         return weight != current_weight
 
     def act(self):
         """
         Figure out what you want to do from ansible, and then do it.
         """
-
         # get info for the current host
         stat_output = self.get_stat_output()
         self.host_attributes = self.get_host_stat_line(self.host, stat_output)
