@@ -130,12 +130,11 @@ class HAProxy(object):
         self.command_results = []
         self.host_attributes = []
 
-    def execute(self, cmd, timeout=200):
+    def execute(self, cmd, log=True, timeout=200):
         """
         Executes a HAProxy command by sending a message to a HAProxy's local
         UNIX socket and waiting up to 'timeout' milliseconds for the response.
         """
-
         self.client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.client.connect(self.socket)
         self.client.sendall('%s\n' % cmd)
@@ -145,7 +144,8 @@ class HAProxy(object):
         while buf:
             result += buf
             buf = self.client.recv(RECV_SIZE)
-        self.command_results = result.strip()
+        if log:
+            self.command_results = result.strip()
         self.client.close()
         return result
 
@@ -166,6 +166,10 @@ class HAProxy(object):
         if weight_changed is False and status_changed is False:
             self.execute(cmd)
             return False
+
+        if self.module.check_mode:
+            self.execute(cmd)
+            return True
 
         if weight_changed is True:
             cmd += "; set weight %s/%s %s" % (pxname, svname, self.weight)
@@ -191,6 +195,10 @@ class HAProxy(object):
             self.execute(cmd)
             return False
 
+        if self.module.check_mode:
+            self.execute(cmd)
+            return True
+
         cmd += "; disable server %s/%s" % (pxname, svname)
 
         if self.shutdown_sessions:
@@ -208,7 +216,7 @@ class HAProxy(object):
     def get_current_weight(self):
         return self.get_host_attribute('weight')
 
-    def get_stat_output(self):
+    def get_stat_output(self, log=False):
         output = self.execute('show stat')
         return output.lstrip('# ').strip().split('\n')
 
@@ -251,7 +259,6 @@ class HAProxy(object):
 
         changed = True
 
-        # toggle enable/disbale server
         if self.state == 'enabled':
             changed = self.enabled()
 
@@ -264,7 +271,6 @@ class HAProxy(object):
         self.module.exit_json(stdout=self.command_results, changed=changed)
 
 def main():
-
     # load ansible module object
     module = AnsibleModule(
         argument_spec = dict(
@@ -275,7 +281,7 @@ def main():
             socket = dict(required=False, default=DEFAULT_SOCKET_LOCATION),
             shutdown_sessions=dict(required=False, default=False),
         ),
-
+        supports_check_mode = True
     )
 
     if not socket:
